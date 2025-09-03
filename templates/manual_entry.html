@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}手動入力 - 駐車場管理システム{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-6 mx-auto">
+        <div class="card">
+            <div class="card-header">
+                <h3><i class="bi bi-keyboard"></i> 手動入力</h3>
+            </div>
+            <div class="card-body">
+                <p class="text-muted">画像認識がうまくいかない場合や、直接入力したい場合にご利用ください。</p>
+                
+                <form method="post">
+                    <div class="mb-3">
+                        <label for="plate_number" class="form-label">ナンバープレート:</label>
+                        <input type="text" class="form-control" id="plate_number" name="plate_number" 
+                               placeholder="例: 品川301あ1234" required>
+                        <div class="form-text">正確なナンバーを入力してください</div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">操作を選択:</label>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="action" id="entry_manual" value="entry" checked>
+                            <label class="form-check-label" for="entry_manual">
+                                <i class="bi bi-arrow-right-circle text-success"></i> 入場
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="action" id="exit_manual" value="exit">
+                            <label class="form-check-label" for="exit_manual">
+                                <i class="bi bi-arrow-left-circle text-danger"></i> 退場
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-plus-circle"></i> 記録を追加
+                    </button>
+                    <a href="{{ url_for('index') }}" class="btn btn-secondary">
+                        <i class="bi bi-arrow-left"></i> 戻る
+                    </a>
+                </form>
+            </div>
+        </div>
+        
+        <div class="mt-4">
+            <h5><i class="bi bi-info-circle"></i> 注意事項</h5>
+            <ul>
+                <li>ナンバープレートは正確に入力してください</li>
+                <li>退場を選択した場合、該当する入場記録がある車両のみ更新されます</li>
+                <li>同じナンバーで複数の入場記録がある場合は、最新の記録が更新されます</li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}

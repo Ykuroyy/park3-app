@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8 mx-auto">
+        <div class="card">
+            <div class="card-header">
+                <h3><i class="bi bi-camera"></i> 車両ナンバープレート撮影</h3>
+            </div>
+            <div class="card-body">
+                <form action="{{ url_for('upload_file') }}" method="post" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label for="file" class="form-label">スマートフォンで撮影した写真をアップロード:</label>
+                        <input type="file" class="form-control" id="file" name="file" accept="image/*" required>
+                        <div class="form-text">PNG, JPG, JPEG, GIF形式に対応（最大16MB）</div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">操作を選択:</label>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="action" id="entry" value="entry" checked>
+                            <label class="form-check-label" for="entry">
+                                <i class="bi bi-arrow-right-circle text-success"></i> 入場
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="action" id="exit" value="exit">
+                            <label class="form-check-label" for="exit">
+                                <i class="bi bi-arrow-left-circle text-danger"></i> 退場
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-upload"></i> 画像をアップロード・認識
+                    </button>
+                </form>
+            </div>
+        </div>
+        
+        <div class="mt-4">
+            <h4><i class="bi bi-info-circle"></i> 使い方</h4>
+            <ol>
+                <li>スマートフォンのカメラで車のナンバープレートを撮影</li>
+                <li>撮影した写真をこのページでアップロード</li>
+                <li>入場または退場を選択</li>
+                <li>システムが自動的にナンバープレートを読み取って記録</li>
+            </ol>
+        </div>
+        
+        <div class="row mt-4">
+            <div class="col-md-4">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <i class="bi bi-list-ul display-4 text-primary"></i>
+                        <h5 class="card-title">記録確認</h5>
+                        <p class="card-text">駐車記録を確認</p>
+                        <a href="{{ url_for('records') }}" class="btn btn-outline-primary">記録一覧</a>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <i class="bi bi-bar-chart display-4 text-success"></i>
+                        <h5 class="card-title">分析</h5>
+                        <p class="card-text">駐車状況を分析</p>
+                        <a href="{{ url_for('analytics') }}" class="btn btn-outline-success">分析画面</a>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <i class="bi bi-download display-4 text-info"></i>
+                        <h5 class="card-title">CSV出力</h5>
+                        <p class="card-text">データをダウンロード</p>
+                        <a href="{{ url_for('export_csv') }}" class="btn btn-outline-info">CSV出力</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

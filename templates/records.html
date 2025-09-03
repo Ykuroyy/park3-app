@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}記録一覧 - 駐車場管理システム{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h2><i class="bi bi-list-ul"></i> 駐車記録一覧</h2>
+        
+        <!-- 現在駐車中の車両 -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h4><i class="bi bi-car-front text-success"></i> 現在駐車中の車両 ({{ active_cars|length }}台)</h4>
+            </div>
+            <div class="card-body">
+                {% if active_cars %}
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>ナンバープレート</th>
+                                    <th>入場日</th>
+                                    <th>駐車日数</th>
+                                    <th>状態</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for car in active_cars %}
+                                <tr>
+                                    <td><strong>{{ car.plate_number }}</strong></td>
+                                    <td>{{ car.entry_date }}</td>
+                                    <td>{{ "%.1f"|format(car.days_parked) }}日</td>
+                                    <td>
+                                        <span class="badge bg-success">駐車中</span>
+                                        {% if car.days_parked >= 7 %}
+                                            <span class="badge bg-warning">長期駐車</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <p class="text-muted">現在駐車中の車両はありません。</p>
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- 全記録 -->
+        <div class="card">
+            <div class="card-header">
+                <h4><i class="bi bi-clock-history"></i> 全記録 (最新100件)</h4>
+            </div>
+            <div class="card-body">
+                {% if all_records %}
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>ナンバープレート</th>
+                                    <th>入場日</th>
+                                    <th>退場日</th>
+                                    <th>駐車日数</th>
+                                    <th>状態</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for record in all_records %}
+                                <tr>
+                                    <td><strong>{{ record.plate_number }}</strong></td>
+                                    <td>{{ record.entry_date }}</td>
+                                    <td>
+                                        {% if record.exit_date %}
+                                            {{ record.exit_date }}
+                                        {% else %}
+                                            <span class="text-muted">-</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ "%.1f"|format(record.days_parked) }}日</td>
+                                    <td>
+                                        {% if record.exit_date %}
+                                            <span class="badge bg-secondary">退場済み</span>
+                                        {% else %}
+                                            <span class="badge bg-success">駐車中</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <p class="text-muted">記録がありません。</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

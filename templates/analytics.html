@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+
+{% block title %}分析 - 駐車場管理システム{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h2><i class="bi bi-bar-chart"></i> 駐車場分析</h2>
+        
+        <!-- 統計サマリー -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h2 class="text-primary">{{ stats.current_count }}</h2>
+                        <p>現在駐車中</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h2 class="text-success">{{ stats.today_entries }}</h2>
+                        <p>今日の入場台数</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h2 class="text-info">{{ stats.avg_days }}</h2>
+                        <p>平均駐車日数</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h2 class="text-warning">{{ long_term|length }}</h2>
+                        <p>長期駐車車両</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 長期駐車車両 -->
+        {% if long_term %}
+        <div class="card mb-4">
+            <div class="card-header">
+                <h4><i class="bi bi-exclamation-triangle text-warning"></i> 長期駐車車両 (7日以上)</h4>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>ナンバープレート</th>
+                                <th>入場日</th>
+                                <th>駐車日数</th>
+                                <th>警告レベル</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for car in long_term %}
+                            <tr>
+                                <td><strong>{{ car.plate_number }}</strong></td>
+                                <td>{{ car.entry_date }}</td>
+                                <td>{{ "%.1f"|format(car.days_parked) }}日</td>
+                                <td>
+                                    {% if car.days_parked >= 30 %}
+                                        <span class="badge bg-danger">要注意</span>
+                                    {% elif car.days_parked >= 14 %}
+                                        <span class="badge bg-warning">注意</span>
+                                    {% else %}
+                                        <span class="badge bg-info">監視</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        
+        <!-- 月別統計 -->
+        <div class="card">
+            <div class="card-header">
+                <h4><i class="bi bi-calendar3"></i> 月別入場統計</h4>
+            </div>
+            <div class="card-body">
+                {% if monthly_stats %}
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>月</th>
+                                    <th>入場台数</th>
+                                    <th>グラフ</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for stat in monthly_stats %}
+                                <tr>
+                                    <td>{{ stat.month }}</td>
+                                    <td>{{ stat.entries }}台</td>
+                                    <td>
+                                        <div class="progress" style="width: 200px;">
+                                            <div class="progress-bar" role="progressbar" 
+                                                 style="width: {{ (stat.entries / monthly_stats[0].entries * 100)|round }}%">
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <p class="text-muted">統計データがありません。</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
