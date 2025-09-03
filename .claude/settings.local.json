@@ -6,7 +6,9 @@
       "Bash(source:*)",
       "Bash(brew install:*)",
       "Bash(chmod:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(tesseract:*)",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []

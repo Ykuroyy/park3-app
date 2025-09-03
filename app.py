@@ -14,12 +14,11 @@ import re
 import traceback
 import logging
 
-# EasyOCRをオプショナルインポート
+# EasyOCRをオプショナルインポート（初期化は遅延実行）
 try:
     import easyocr
     EASYOCR_AVAILABLE = True
-    # EasyOCRリーダーを初期化（日本語・英語対応）
-    easyocr_reader = easyocr.Reader(['ja', 'en'])
+    easyocr_reader = None  # 初期化は必要な時に実行
 except ImportError:
     EASYOCR_AVAILABLE = False
     easyocr_reader = None
@@ -35,10 +34,19 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 app.config['DEBUG'] = True
 
 # Tesseractの設定
-if os.path.exists('/usr/bin/tesseract'):
-    pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
-elif os.path.exists('/opt/homebrew/bin/tesseract'):
-    pytesseract.pytesseract.tesseract_cmd = '/opt/homebrew/bin/tesseract'
+tesseract_paths = [
+    '/opt/homebrew/bin/tesseract',
+    '/usr/local/bin/tesseract',
+    '/usr/bin/tesseract'
+]
+
+for path in tesseract_paths:
+    if os.path.exists(path):
+        pytesseract.pytesseract.tesseract_cmd = path
+        logger.info(f"Tesseractパスを設定: {path}")
+        break
+else:
+    logger.error("Tesseractが見つかりません")
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 
@@ -107,21 +115,27 @@ def extract_plate_number(image_path):
         # 簡単な前処理のみ実行
         gray = cv2.medianBlur(gray, 3)
         
-        # EasyOCRを優先して使用
-        if EASYOCR_AVAILABLE and easyocr_reader:
-            logger.info("EasyOCR開始")
-            try:
-                results = easyocr_reader.readtext(gray)
-                if results:
-                    # 最も信頼度の高いテキストを選択
-                    best_result = max(results, key=lambda x: x[2])
-                    text = best_result[1].strip().replace(' ', '').replace('\n', '').replace('\t', '')
-                    logger.info(f"EasyOCR結果: {text} (信頼度: {best_result[2]:.2f})")
-                    
-                    if len(text) >= 3 and best_result[2] > 0.5:  # 信頼度50%以上
-                        return text
-            except Exception as e:
-                logger.error(f"EasyOCRエラー: {e}")
+        # 現在はTesseractのみを使用（EasyOCRは一時的に無効化）
+        # if EASYOCR_AVAILABLE:
+        #     logger.info("EasyOCR開始")
+        #     try:
+        #         global easyocr_reader
+        #         if easyocr_reader is None:
+        #             logger.info("EasyOCRリーダーを初期化中...")
+        #             easyocr_reader = easyocr.Reader(['ja', 'en'])
+        #         
+        #         results = easyocr_reader.readtext(gray)
+        #         if results:
+        #             # 最も信頼度の高いテキストを選択
+        #             best_result = max(results, key=lambda x: x[2])
+        #             text = best_result[1].strip().replace(' ', '').replace('\n', '').replace('\t', '')
+        #             logger.info(f"EasyOCR結果: {text} (信頼度: {best_result[2]:.2f})")
+        #             
+        #             if len(text) >= 3 and best_result[2] > 0.5:  # 信頼度50%以上
+        #                 return text
+        #     except Exception as e:
+        #         logger.error(f"EasyOCRエラー: {e}")
+        #         # EasyOCRが失敗した場合はTesseractにフォールバック
         
         # TesseractでOCRを試す
         logger.info("Tesseract OCR開始")
@@ -566,5 +580,5 @@ def test_ocr():
 
 if __name__ == '__main__':
     init_db()
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 5001))  # ポートを5001に変更
     app.run(host='0.0.0.0', port=port, debug=False)
