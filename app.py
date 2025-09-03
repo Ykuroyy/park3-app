@@ -46,18 +46,24 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def init_db():
-    conn = sqlite3.connect('parking.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS parking_records
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  plate_number TEXT NOT NULL,
-                  entry_date DATE NOT NULL,
-                  exit_date DATE,
-                  is_active INTEGER DEFAULT 1,
-                  image_path TEXT,
-                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-    conn.commit()
-    conn.close()
+    try:
+        logger.info("データベース初期化開始")
+        conn = sqlite3.connect('parking.db')
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS parking_records
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      plate_number TEXT NOT NULL,
+                      entry_date DATE NOT NULL,
+                      exit_date DATE,
+                      is_active INTEGER DEFAULT 1,
+                      image_path TEXT,
+                      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+        conn.commit()
+        conn.close()
+        logger.info("データベース初期化完了")
+    except Exception as e:
+        logger.error(f"データベース初期化エラー: {e}")
+        raise
 
 def extract_plate_number(image_path):
     try:
@@ -277,119 +283,230 @@ def upload_file():
 
 @app.route('/records')
 def records():
-    conn = sqlite3.connect('parking.db')
+    try:
+        logger.info("記録一覧画面の表示開始")
+        
+        conn = sqlite3.connect('parking.db')
+        
+        # データベースの初期化を確認
+        c = conn.cursor()
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='parking_records'")
+        if not c.fetchone():
+            logger.info("テーブルが存在しないため初期化")
+            init_db()
+        
+        # 現在駐車中の車両
+        try:
+            active_cars = pd.read_sql_query("""
+                SELECT plate_number, entry_date, 
+                       (julianday('now') - julianday(entry_date)) as days_parked
+                FROM parking_records 
+                WHERE is_active = 1 
+                ORDER BY entry_date DESC
+            """, conn)
+            logger.info(f"現在駐車中の車両数: {len(active_cars)}")
+        except Exception as e:
+            logger.error(f"現在駐車中車両の取得エラー: {e}")
+            active_cars = pd.DataFrame()
+        
+        # 全記録
+        try:
+            all_records = pd.read_sql_query("""
+                SELECT plate_number, entry_date, exit_date, 
+                       CASE WHEN exit_date IS NOT NULL 
+                            THEN (julianday(exit_date) - julianday(entry_date))
+                            ELSE (julianday('now') - julianday(entry_date))
+                       END as days_parked
+                FROM parking_records 
+                ORDER BY created_at DESC
+                LIMIT 100
+            """, conn)
+            logger.info(f"全記録数: {len(all_records)}")
+        except Exception as e:
+            logger.error(f"全記録の取得エラー: {e}")
+            all_records = pd.DataFrame()
+        
+        conn.close()
+        
+        # DataFrameをdictに変換（エラー処理付き）
+        try:
+            active_cars_dict = active_cars.to_dict('records') if not active_cars.empty else []
+            all_records_dict = all_records.to_dict('records') if not all_records.empty else []
+        except Exception as e:
+            logger.error(f"データ変換エラー: {e}")
+            active_cars_dict = []
+            all_records_dict = []
+        
+        logger.info("記録一覧画面の表示完了")
+        
+        return render_template('records.html', 
+                             active_cars=active_cars_dict,
+                             all_records=all_records_dict)
     
-    # 現在駐車中の車両
-    active_cars = pd.read_sql_query("""
-        SELECT plate_number, entry_date, 
-               (julianday('now') - julianday(entry_date)) as days_parked
-        FROM parking_records 
-        WHERE is_active = 1 
-        ORDER BY entry_date DESC
-    """, conn)
-    
-    # 全記録
-    all_records = pd.read_sql_query("""
-        SELECT plate_number, entry_date, exit_date, 
-               CASE WHEN exit_date IS NOT NULL 
-                    THEN (julianday(exit_date) - julianday(entry_date))
-                    ELSE (julianday('now') - julianday(entry_date))
-               END as days_parked
-        FROM parking_records 
-        ORDER BY created_at DESC
-        LIMIT 100
-    """, conn)
-    
-    conn.close()
-    
-    return render_template('records.html', 
-                         active_cars=active_cars.to_dict('records'),
-                         all_records=all_records.to_dict('records'))
+    except Exception as e:
+        logger.error(f"記録一覧画面のエラー: {e}")
+        logger.error(f"トレースバック: {traceback.format_exc()}")
+        flash(f'記録の取得中にエラーが発生しました: {str(e)}')
+        return render_template('records.html', 
+                             active_cars=[],
+                             all_records=[])
 
 @app.route('/analytics')
 def analytics():
-    conn = sqlite3.connect('parking.db')
+    try:
+        logger.info("分析画面の表示開始")
+        
+        conn = sqlite3.connect('parking.db')
+        
+        # データベースの初期化を確認
+        c = conn.cursor()
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='parking_records'")
+        if not c.fetchone():
+            logger.info("テーブルが存在しないため初期化")
+            init_db()
+            conn.close()
+            conn = sqlite3.connect('parking.db')
+        
+        # 統計データを取得
+        stats = {}
+        
+        # 現在の駐車台数
+        try:
+            result = pd.read_sql_query("SELECT COUNT(*) as count FROM parking_records WHERE is_active = 1", conn)
+            stats['current_count'] = int(result.iloc[0]['count']) if not result.empty else 0
+        except Exception as e:
+            logger.error(f"現在の駐車台数取得エラー: {e}")
+            stats['current_count'] = 0
+        
+        # 今日の入場台数
+        try:
+            result = pd.read_sql_query("SELECT COUNT(*) as count FROM parking_records WHERE entry_date = date('now')", conn)
+            stats['today_entries'] = int(result.iloc[0]['count']) if not result.empty else 0
+        except Exception as e:
+            logger.error(f"今日の入場台数取得エラー: {e}")
+            stats['today_entries'] = 0
+        
+        # 平均駐車日数
+        try:
+            result = pd.read_sql_query("""
+                SELECT AVG(julianday(COALESCE(exit_date, 'now')) - julianday(entry_date)) as avg_days 
+                FROM parking_records
+            """, conn)
+            avg_days = result.iloc[0]['avg_days'] if not result.empty and result.iloc[0]['avg_days'] is not None else 0
+            stats['avg_days'] = round(float(avg_days), 1) if avg_days else 0
+        except Exception as e:
+            logger.error(f"平均駐車日数取得エラー: {e}")
+            stats['avg_days'] = 0
+        
+        # 長期駐車車両（7日以上）
+        try:
+            long_term = pd.read_sql_query("""
+                SELECT plate_number, entry_date,
+                       (julianday('now') - julianday(entry_date)) as days_parked
+                FROM parking_records 
+                WHERE is_active = 1 AND (julianday('now') - julianday(entry_date)) >= 7
+                ORDER BY days_parked DESC
+            """, conn)
+            long_term_dict = long_term.to_dict('records') if not long_term.empty else []
+        except Exception as e:
+            logger.error(f"長期駐車車両取得エラー: {e}")
+            long_term_dict = []
+        
+        # 月別統計
+        try:
+            monthly_stats = pd.read_sql_query("""
+                SELECT strftime('%Y-%m', entry_date) as month,
+                       COUNT(*) as entries
+                FROM parking_records 
+                GROUP BY strftime('%Y-%m', entry_date)
+                ORDER BY month DESC
+                LIMIT 12
+            """, conn)
+            monthly_stats_dict = monthly_stats.to_dict('records') if not monthly_stats.empty else []
+        except Exception as e:
+            logger.error(f"月別統計取得エラー: {e}")
+            monthly_stats_dict = []
+        
+        conn.close()
+        
+        logger.info("分析画面の表示完了")
+        
+        return render_template('analytics.html',
+                             stats=stats,
+                             long_term=long_term_dict,
+                             monthly_stats=monthly_stats_dict)
     
-    # 統計データを取得
-    stats = {}
-    
-    # 現在の駐車台数
-    current_count = pd.read_sql_query("SELECT COUNT(*) as count FROM parking_records WHERE is_active = 1", conn).iloc[0]['count']
-    stats['current_count'] = current_count
-    
-    # 今日の入場台数
-    today_entries = pd.read_sql_query("SELECT COUNT(*) as count FROM parking_records WHERE entry_date = date('now')", conn).iloc[0]['count']
-    stats['today_entries'] = today_entries
-    
-    # 平均駐車日数
-    avg_days = pd.read_sql_query("""
-        SELECT AVG(julianday(COALESCE(exit_date, 'now')) - julianday(entry_date)) as avg_days 
-        FROM parking_records
-    """, conn).iloc[0]['avg_days']
-    stats['avg_days'] = round(avg_days, 1) if avg_days else 0
-    
-    # 長期駐車車両（7日以上）
-    long_term = pd.read_sql_query("""
-        SELECT plate_number, entry_date,
-               (julianday('now') - julianday(entry_date)) as days_parked
-        FROM parking_records 
-        WHERE is_active = 1 AND (julianday('now') - julianday(entry_date)) >= 7
-        ORDER BY days_parked DESC
-    """, conn)
-    
-    # 月別統計
-    monthly_stats = pd.read_sql_query("""
-        SELECT strftime('%Y-%m', entry_date) as month,
-               COUNT(*) as entries
-        FROM parking_records 
-        GROUP BY strftime('%Y-%m', entry_date)
-        ORDER BY month DESC
-        LIMIT 12
-    """, conn)
-    
-    conn.close()
-    
-    return render_template('analytics.html',
-                         stats=stats,
-                         long_term=long_term.to_dict('records'),
-                         monthly_stats=monthly_stats.to_dict('records'))
+    except Exception as e:
+        logger.error(f"分析画面のエラー: {e}")
+        logger.error(f"トレースバック: {traceback.format_exc()}")
+        flash(f'分析データの取得中にエラーが発生しました: {str(e)}')
+        return render_template('analytics.html',
+                             stats={'current_count': 0, 'today_entries': 0, 'avg_days': 0},
+                             long_term=[],
+                             monthly_stats=[])
 
 @app.route('/export')
 def export_csv():
-    conn = sqlite3.connect('parking.db')
+    try:
+        logger.info("CSV出力開始")
+        
+        conn = sqlite3.connect('parking.db')
+        
+        # データベースの初期化を確認
+        c = conn.cursor()
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='parking_records'")
+        if not c.fetchone():
+            logger.info("テーブルが存在しないため初期化")
+            init_db()
+            conn.close()
+            conn = sqlite3.connect('parking.db')
+        
+        try:
+            df = pd.read_sql_query("""
+                SELECT plate_number as 'ナンバープレート',
+                       entry_date as '入場日',
+                       exit_date as '退場日',
+                       CASE WHEN is_active = 1 THEN '駐車中' ELSE '退場済み' END as '状態',
+                       CASE WHEN exit_date IS NOT NULL 
+                            THEN (julianday(exit_date) - julianday(entry_date))
+                            ELSE (julianday('now') - julianday(entry_date))
+                       END as '駐車日数',
+                       created_at as '記録作成日時'
+                FROM parking_records 
+                ORDER BY created_at DESC
+            """, conn)
+            logger.info(f"CSV出力データ件数: {len(df)}")
+        except Exception as e:
+            logger.error(f"データ取得エラー: {e}")
+            # 空のDataFrameを作成
+            df = pd.DataFrame(columns=['ナンバープレート', '入場日', '退場日', '状態', '駐車日数', '記録作成日時'])
+        
+        conn.close()
+        
+        # CSVファイルを一時的に作成
+        output = io.StringIO()
+        df.to_csv(output, index=False, encoding='utf-8-sig')
+        output.seek(0)
+        
+        # バイナリストリームに変換
+        output_bytes = io.BytesIO()
+        output_bytes.write(output.getvalue().encode('utf-8-sig'))
+        output_bytes.seek(0)
+        
+        logger.info("CSV出力完了")
+        
+        return send_file(
+            output_bytes,
+            mimetype='text/csv',
+            as_attachment=True,
+            download_name=f'parking_records_{datetime.now().strftime("%Y%m%d")}.csv'
+        )
     
-    df = pd.read_sql_query("""
-        SELECT plate_number as 'ナンバープレート',
-               entry_date as '入場日',
-               exit_date as '退場日',
-               CASE WHEN is_active = 1 THEN '駐車中' ELSE '退場済み' END as '状態',
-               CASE WHEN exit_date IS NOT NULL 
-                    THEN (julianday(exit_date) - julianday(entry_date))
-                    ELSE (julianday('now') - julianday(entry_date))
-               END as '駐車日数',
-               created_at as '記録作成日時'
-        FROM parking_records 
-        ORDER BY created_at DESC
-    """, conn)
-    
-    conn.close()
-    
-    # CSVファイルを一時的に作成
-    output = io.StringIO()
-    df.to_csv(output, index=False, encoding='utf-8-sig')
-    output.seek(0)
-    
-    # バイナリストリームに変換
-    output_bytes = io.BytesIO()
-    output_bytes.write(output.getvalue().encode('utf-8-sig'))
-    output_bytes.seek(0)
-    
-    return send_file(
-        output_bytes,
-        mimetype='text/csv',
-        as_attachment=True,
-        download_name=f'parking_records_{datetime.now().strftime("%Y%m%d")}.csv'
-    )
+    except Exception as e:
+        logger.error(f"CSV出力エラー: {e}")
+        logger.error(f"トレースバック: {traceback.format_exc()}")
+        flash(f'CSV出力中にエラーが発生しました: {str(e)}')
+        return redirect(url_for('records'))
 
 @app.route('/manual_entry', methods=['GET', 'POST'])
 def manual_entry():
