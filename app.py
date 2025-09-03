@@ -30,8 +30,9 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'
 app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
 app.config['DEBUG'] = True
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # キャッシュ無効化
 
 # Tesseractの設定
 tesseract_paths = [
@@ -104,7 +105,17 @@ def extract_plate_number(image_path):
                 logger.error(f"PILでも画像読み込み失敗: {e}")
                 return "画像の読み込みに失敗しました"
         
-        logger.info(f"画像サイズ: {image.shape}")
+        logger.info(f"元の画像サイズ: {image.shape}")
+        
+        # 画像サイズを縮小して処理速度向上
+        height, width = image.shape[:2]
+        max_size = 1024  # 最大サイズを制限
+        if width > max_size or height > max_size:
+            scale = max_size / max(width, height)
+            new_width = int(width * scale)
+            new_height = int(height * scale)
+            image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_AREA)
+            logger.info(f"リサイズ後: {image.shape}")
         
         # グレースケールに変換
         if len(image.shape) == 3:
@@ -137,15 +148,28 @@ def extract_plate_number(image_path):
         #         logger.error(f"EasyOCRエラー: {e}")
         #         # EasyOCRが失敗した場合はTesseractにフォールバック
         
-        # TesseractでOCRを試す
+        # TesseractでOCRを試す（高速化設定）
         logger.info("Tesseract OCR開始")
         try:
-            text = pytesseract.image_to_string(gray, config='--psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZあいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん')
-            text = text.strip().replace(' ', '').replace('\n', '').replace('\t', '')
-            logger.info(f"Tesseract結果: {text}")
+            # より高速な設定でOCRを実行
+            configs = [
+                '--psm 8 --oem 3',  # 単語レベル、最新エンジン
+                '--psm 7 --oem 3',  # テキストライン、最新エンジン
+                '--psm 6 --oem 3'   # 均等ブロック、最新エンジン
+            ]
             
-            if len(text) >= 3:
-                return text if text else "認識できませんでした"
+            for config in configs:
+                try:
+                    text = pytesseract.image_to_string(gray, config=config, lang='eng')
+                    text = text.strip().replace(' ', '').replace('\n', '').replace('\t', '')
+                    logger.info(f"Tesseract結果 ({config}): {text}")
+                    
+                    if len(text) >= 3:
+                        return text
+                except Exception as e:
+                    logger.debug(f"Config {config} failed: {e}")
+                    continue
+                    
         except Exception as e:
             logger.error(f"Tesseract OCRエラー: {e}")
         
@@ -572,13 +596,61 @@ def test_ocr():
     # EasyOCRテスト
     if EASYOCR_AVAILABLE:
         try:
-            test_results['easyocr_languages'] = easyocr_reader.lang_list
+            test_results['easyocr_languages'] = easyocr_reader.lang_list if easyocr_reader else "Not initialized"
         except Exception as e:
             test_results['errors'].append(f"EasyOCR: {str(e)}")
     
     return jsonify(test_results)
 
+@app.route('/test_upload', methods=['GET', 'POST'])
+def test_upload():
+    """シンプルなアップロードテスト"""
+    if request.method == 'POST':
+        if 'file' not in request.files:
+            return jsonify({'error': 'ファイルが選択されていません'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'ファイル名が空です'}), 400
+        
+        if file and allowed_file(file.filename):
+            try:
+                # アップロードディレクトリを作成
+                os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+                
+                filename = secure_filename(file.filename)
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                filename = f"test_{timestamp}_{filename}"
+                filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                
+                file.save(filepath)
+                
+                return jsonify({
+                    'success': True,
+                    'filename': filename,
+                    'filepath': filepath,
+                    'filesize': os.path.getsize(filepath)
+                })
+            except Exception as e:
+                return jsonify({'error': f'アップロード失敗: {str(e)}'}), 500
+        else:
+            return jsonify({'error': '無効なファイル形式です'}), 400
+    
+    return '''
+    <!DOCTYPE html>
+    <html>
+    <head><title>テストアップロード</title></head>
+    <body>
+        <h2>テストアップロード</h2>
+        <form method="post" enctype="multipart/form-data">
+            <input type="file" name="file" accept="image/*" required>
+            <input type="submit" value="アップロード">
+        </form>
+    </body>
+    </html>
+    '''
+
 if __name__ == '__main__':
     init_db()
     port = int(os.environ.get('PORT', 5001))  # ポートを5001に変更
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
