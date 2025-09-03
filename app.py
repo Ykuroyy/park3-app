@@ -11,11 +11,34 @@ from PIL import Image
 import io
 import tempfile
 import re
+import traceback
+import logging
+
+# EasyOCRをオプショナルインポート
+try:
+    import easyocr
+    EASYOCR_AVAILABLE = True
+    # EasyOCRリーダーを初期化（日本語・英語対応）
+    easyocr_reader = easyocr.Reader(['ja', 'en'])
+except ImportError:
+    EASYOCR_AVAILABLE = False
+    easyocr_reader = None
+
+# ログ設定
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+app.config['DEBUG'] = True
+
+# Tesseractの設定
+if os.path.exists('/usr/bin/tesseract'):
+    pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
+elif os.path.exists('/opt/homebrew/bin/tesseract'):
+    pytesseract.pytesseract.tesseract_cmd = '/opt/homebrew/bin/tesseract'
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 
@@ -38,65 +61,122 @@ def init_db():
 
 def extract_plate_number(image_path):
     try:
+        logger.info(f"画像処理開始: {image_path}")
+        
+        # ファイルの存在確認
+        if not os.path.exists(image_path):
+            logger.error(f"画像ファイルが存在しません: {image_path}")
+            return "ファイルが見つかりません"
+        
+        # Tesseractがインストールされているか確認
+        try:
+            pytesseract.get_tesseract_version()
+            logger.info("Tesseract利用可能")
+        except Exception as e:
+            logger.error(f"Tesseractエラー: {e}")
+            # Tesseractが利用できない場合は手動入力を促す
+            return "OCRエンジンが利用できません。手動入力をご利用ください。"
+        
         # 画像を読み込み
         image = cv2.imread(image_path)
         if image is None:
-            return None
-            
-        # グレースケールに変換
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            logger.error(f"画像の読み込みに失敗: {image_path}")
+            # PILで試してみる
+            try:
+                pil_image = Image.open(image_path)
+                image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+                logger.info("PILで画像読み込み成功")
+            except Exception as e:
+                logger.error(f"PILでも画像読み込み失敗: {e}")
+                return "画像の読み込みに失敗しました"
         
-        # ノイズ除去
+        logger.info(f"画像サイズ: {image.shape}")
+        
+        # グレースケールに変換
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image
+        
+        # 簡単な前処理のみ実行
         gray = cv2.medianBlur(gray, 3)
         
-        # コントラスト調整
-        gray = cv2.convertScaleAbs(gray, alpha=1.5, beta=0)
+        # EasyOCRを優先して使用
+        if EASYOCR_AVAILABLE and easyocr_reader:
+            logger.info("EasyOCR開始")
+            try:
+                results = easyocr_reader.readtext(gray)
+                if results:
+                    # 最も信頼度の高いテキストを選択
+                    best_result = max(results, key=lambda x: x[2])
+                    text = best_result[1].strip().replace(' ', '').replace('\n', '').replace('\t', '')
+                    logger.info(f"EasyOCR結果: {text} (信頼度: {best_result[2]:.2f})")
+                    
+                    if len(text) >= 3 and best_result[2] > 0.5:  # 信頼度50%以上
+                        return text
+            except Exception as e:
+                logger.error(f"EasyOCRエラー: {e}")
         
-        # エッジ検出
-        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-        
-        # 輪郭検出
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # ナンバープレートらしい矩形を探す
-        plate_candidates = []
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area > 1000:  # 最小面積
-                rect = cv2.boundingRect(contour)
-                x, y, w, h = rect
-                aspect_ratio = w / h
-                if 2 < aspect_ratio < 6:  # ナンバープレートのアスペクト比
-                    plate_candidates.append((rect, area))
-        
-        # 面積が最大の候補を選択
-        if plate_candidates:
-            best_rect = max(plate_candidates, key=lambda x: x[1])[0]
-            x, y, w, h = best_rect
-            plate_region = gray[y:y+h, x:x+w]
+        # TesseractでOCRを試す
+        logger.info("Tesseract OCR開始")
+        try:
+            text = pytesseract.image_to_string(gray, config='--psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZあいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん')
+            text = text.strip().replace(' ', '').replace('\n', '').replace('\t', '')
+            logger.info(f"Tesseract結果: {text}")
             
-            # OCRでテキスト抽出
-            text = pytesseract.image_to_string(plate_region, config='--psm 8 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ')
-            
-            # 日本のナンバープレート形式に合うかチェック
-            text = text.strip().replace(' ', '').replace('\n', '')
-            
-            # 簡単なパターンマッチング（例：品川301あ1234）
-            if len(text) >= 4:
-                return text
+            if len(text) >= 3:
+                return text if text else "認識できませんでした"
+        except Exception as e:
+            logger.error(f"Tesseract OCRエラー: {e}")
         
-        # 候補が見つからない場合は全体にOCRを適用
-        text = pytesseract.image_to_string(gray, config='--psm 6')
-        text = text.strip().replace(' ', '').replace('\n', '')
-        
-        if len(text) >= 4:
-            return text
+        # より高度な処理を試す
+        try:
+            # コントラスト調整
+            gray = cv2.convertScaleAbs(gray, alpha=1.5, beta=0)
             
+            # エッジ検出
+            edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+            
+            # 輪郭検出
+            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # ナンバープレートらしい矩形を探す
+            plate_candidates = []
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                if area > 500:  # 最小面積を小さくする
+                    rect = cv2.boundingRect(contour)
+                    x, y, w, h = rect
+                    if h > 0:  # ゼロ除算を防ぐ
+                        aspect_ratio = w / h
+                        if 1.5 < aspect_ratio < 8:  # アスペクト比の範囲を広げる
+                            plate_candidates.append((rect, area))
+            
+            # 面積が最大の候補を選択
+            if plate_candidates:
+                best_rect = max(plate_candidates, key=lambda x: x[1])[0]
+                x, y, w, h = best_rect
+                
+                # 範囲チェック
+                if x >= 0 and y >= 0 and x + w <= gray.shape[1] and y + h <= gray.shape[0]:
+                    plate_region = gray[y:y+h, x:x+w]
+                    
+                    # OCRでテキスト抽出
+                    text = pytesseract.image_to_string(plate_region, config='--psm 8')
+                    text = text.strip().replace(' ', '').replace('\n', '').replace('\t', '')
+                    
+                    if len(text) >= 3:
+                        return text
+            
+        except Exception as e:
+            logger.error(f"高度な処理でエラー: {e}")
+        
         return "認識できませんでした"
         
     except Exception as e:
-        print(f"OCR Error: {e}")
-        return "エラーが発生しました"
+        logger.error(f"OCR全般エラー: {e}")
+        logger.error(f"トレースバック: {traceback.format_exc()}")
+        return f"エラーが発生しました: {str(e)}"
 
 @app.route('/')
 def index():
@@ -104,55 +184,96 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    if 'file' not in request.files:
-        flash('ファイルが選択されていません')
-        return redirect(request.url)
-    
-    file = request.files['file']
-    action = request.form.get('action', 'entry')
-    
-    if file.filename == '':
-        flash('ファイルが選択されていません')
-        return redirect(request.url)
-    
-    if file and allowed_file(file.filename):
-        # アップロードディレクトリを作成
-        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+    try:
+        logger.info("ファイルアップロード開始")
         
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(filepath)
+        if 'file' not in request.files:
+            logger.warning("ファイルが選択されていません")
+            flash('ファイルが選択されていません')
+            return redirect(url_for('index'))
         
-        # ナンバープレート認識
-        plate_number = extract_plate_number(filepath)
+        file = request.files['file']
+        action = request.form.get('action', 'entry')
         
-        if plate_number and plate_number not in ["認識できませんでした", "エラーが発生しました"]:
-            conn = sqlite3.connect('parking.db')
-            c = conn.cursor()
-            
-            if action == 'entry':
-                # 入場記録
-                c.execute("INSERT INTO parking_records (plate_number, entry_date, image_path) VALUES (?, ?, ?)",
-                         (plate_number, date.today(), filepath))
-                flash(f'入場記録を追加しました: {plate_number}')
-            else:
-                # 退場記録
-                c.execute("UPDATE parking_records SET exit_date = ?, is_active = 0 WHERE plate_number = ? AND is_active = 1",
-                         (date.today(), plate_number))
-                if c.rowcount > 0:
-                    flash(f'退場記録を更新しました: {plate_number}')
+        logger.info(f"ファイル名: {file.filename}, アクション: {action}")
+        
+        if file.filename == '':
+            logger.warning("空のファイル名")
+            flash('ファイルが選択されていません')
+            return redirect(url_for('index'))
+        
+        if file and allowed_file(file.filename):
+            try:
+                # アップロードディレクトリを作成
+                os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+                
+                filename = secure_filename(file.filename)
+                # ユニークなファイル名を生成
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                filename = f"{timestamp}_{filename}"
+                filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                
+                logger.info(f"ファイル保存先: {filepath}")
+                
+                file.save(filepath)
+                
+                # ファイルが正しく保存されたか確認
+                if not os.path.exists(filepath):
+                    logger.error("ファイル保存に失敗")
+                    flash('ファイルの保存に失敗しました')
+                    return redirect(url_for('index'))
+                
+                # ナンバープレート認識
+                logger.info("ナンバープレート認識開始")
+                plate_number = extract_plate_number(filepath)
+                logger.info(f"認識結果: {plate_number}")
+                
+                if plate_number and not plate_number.startswith("認識できませんでした") and not plate_number.startswith("エラーが発生しました"):
+                    try:
+                        conn = sqlite3.connect('parking.db')
+                        c = conn.cursor()
+                        
+                        if action == 'entry':
+                            # 入場記録
+                            c.execute("INSERT INTO parking_records (plate_number, entry_date, image_path) VALUES (?, ?, ?)",
+                                     (plate_number, date.today(), filepath))
+                            flash(f'入場記録を追加しました: {plate_number}')
+                            logger.info(f"入場記録追加: {plate_number}")
+                        else:
+                            # 退場記録
+                            c.execute("UPDATE parking_records SET exit_date = ?, is_active = 0 WHERE plate_number = ? AND is_active = 1",
+                                     (date.today(), plate_number))
+                            if c.rowcount > 0:
+                                flash(f'退場記録を更新しました: {plate_number}')
+                                logger.info(f"退場記録更新: {plate_number}")
+                            else:
+                                flash(f'該当する入場記録が見つかりません: {plate_number}')
+                                logger.warning(f"入場記録なし: {plate_number}")
+                        
+                        conn.commit()
+                        conn.close()
+                    except Exception as e:
+                        logger.error(f"データベースエラー: {e}")
+                        flash('データベースエラーが発生しました')
                 else:
-                    flash(f'該当する入場記録が見つかりません: {plate_number}')
-            
-            conn.commit()
-            conn.close()
-        else:
-            flash(f'ナンバープレートを認識できませんでした: {plate_number}')
+                    flash(f'ナンバープレートの認識結果: {plate_number}')
+                
+                return redirect(url_for('records'))
+                
+            except Exception as e:
+                logger.error(f"ファイル処理エラー: {e}")
+                logger.error(f"トレースバック: {traceback.format_exc()}")
+                flash(f'ファイル処理でエラーが発生しました: {str(e)}')
+                return redirect(url_for('index'))
         
-        return redirect(url_for('records'))
+        flash('無効なファイル形式です')
+        return redirect(url_for('index'))
     
-    flash('無効なファイル形式です')
-    return redirect(request.url)
+    except Exception as e:
+        logger.error(f"アップロード全般エラー: {e}")
+        logger.error(f"トレースバック: {traceback.format_exc()}")
+        flash(f'予期しないエラーが発生しました: {str(e)}')
+        return redirect(url_for('index'))
 
 @app.route('/records')
 def records():
@@ -298,6 +419,33 @@ def manual_entry():
             return redirect(url_for('records'))
     
     return render_template('manual_entry.html')
+
+@app.route('/test_ocr')
+def test_ocr():
+    """OCR機能のテスト"""
+    test_results = {
+        'tesseract_available': False,
+        'easyocr_available': EASYOCR_AVAILABLE,
+        'opencv_version': cv2.__version__,
+        'errors': []
+    }
+    
+    # Tesseractテスト
+    try:
+        version = pytesseract.get_tesseract_version()
+        test_results['tesseract_available'] = True
+        test_results['tesseract_version'] = str(version)
+    except Exception as e:
+        test_results['errors'].append(f"Tesseract: {str(e)}")
+    
+    # EasyOCRテスト
+    if EASYOCR_AVAILABLE:
+        try:
+            test_results['easyocr_languages'] = easyocr_reader.lang_list
+        except Exception as e:
+            test_results['errors'].append(f"EasyOCR: {str(e)}")
+    
+    return jsonify(test_results)
 
 if __name__ == '__main__':
     init_db()
